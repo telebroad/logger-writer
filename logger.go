@@ -12,66 +12,74 @@ type logger struct {
 	folder            string
 	folderFS          fs.FS
 	filePatten        string
-	deleteEveryInHour int
-	deleteOlderDays   int
+	deleteEveryInHour time.Duration
+	deleteOlderDays   time.Duration
 	writer            chan []byte
 	writeLen          chan int
 	writerError       chan error
 	openedFile        *os.File
-	timeout           *time.Timer
+	closeFileAfter    time.Duration
+	cancelClose       func() bool
 }
 
-func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays int) *logger {
+func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFileAfter int) *logger {
 
 	l := &logger{
 		folder:            folder,
 		folderFS:          os.DirFS(folder),
 		filePatten:        filePatten,
-		deleteEveryInHour: deleteEveryInHour,
-		deleteOlderDays:   deleteOlderDays,
+		deleteEveryInHour: time.Duration(deleteEveryInHour) * time.Hour,
+		deleteOlderDays:   time.Hour * 24 * time.Duration(deleteOlderDays),
+		closeFileAfter:    time.Duration(closeFileAfter) * time.Second,
 		writer:            make(chan []byte),
 	}
 
 	go l.writeToFile()
+	go l.deleteEvent()
 	return l
 }
 
 func (l *logger) writeToFile() {
 	for b := range l.writer {
 		var err error
-		l.openedFile, err = os.OpenFile("access.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			l.writeLen <- 0
-			l.writerError <- err
+		if l.openedFile == nil {
+			l.openedFile, err = os.OpenFile("access.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				l.writeLen <- 0
+				l.writerError <- err
+			}
+		} else {
+			l.cancelClose()
 		}
+
 		write, err := l.openedFile.Write(b)
 		l.writeLen <- write
 		l.writerError <- err
-		//l.filePatten
+		l.cancelClose = time.AfterFunc(l.closeFileAfter, func() {
+			l.openedFile.Close()
+			l.openedFile = nil
+		}).Stop
 	}
 }
-func (l *logger) End() {
-	l.timeout = time.NewTimer(time.Second * 2)
-	<-l.timeout.C
 
-}
 func (l *logger) Write(b []byte) (int, error) {
 	l.writer <- b
 	return <-l.writeLen, <-l.writerError
 }
 
-func (l *logger) DeleteEvent() {
-	tk := time.NewTicker(time.Duration(l.deleteEveryInHour) * time.Hour)
+func (l *logger) deleteEvent() {
+
+	tk := time.NewTicker(l.deleteEveryInHour)
 	for range tk.C {
-		errList := l.DeleteOldFiles(".")
+		errList := l.deleteOldFiles(".")
 		for _, err := range errList {
 			fmt.Println("error deleting files:", err.Error())
 		}
 	}
 }
 
-func (l *logger) DeleteOldFiles(currentFolder string) (errList []error) {
-	Days30Ago := time.Now().Add(-(time.Hour * 24 * time.Duration(l.deleteOlderDays)))
+func (l *logger) deleteOldFiles(currentFolder string) (errList []error) {
+	Days30Ago := time.Now().Add(-l.deleteOlderDays)
 
 	fs.WalkDir(l.folderFS, currentFolder, func(path string, d fs.DirEntry, err error) error {
 		// getting s.DirEntry.Info
@@ -85,7 +93,7 @@ func (l *logger) DeleteOldFiles(currentFolder string) (errList []error) {
 		}
 		//
 		if stat.IsDir() {
-			errL := l.DeleteOldFiles(filepath.Join(currentFolder, stat.Name()))
+			errL := l.deleteOldFiles(filepath.Join(currentFolder, stat.Name()))
 			if len(errL) != 0 {
 				errList = append(errList, errL...)
 				return nil
