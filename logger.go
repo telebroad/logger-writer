@@ -20,6 +20,7 @@ type logger struct {
 	openedFile        *os.File
 	closeFileAfter    time.Duration
 	cancelClose       func() bool
+	fileLocation      string
 }
 
 func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFileAfter int) *logger {
@@ -31,7 +32,9 @@ func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFil
 		deleteEveryInHour: time.Duration(deleteEveryInHour) * time.Hour,
 		deleteOlderDays:   time.Hour * 24 * time.Duration(deleteOlderDays),
 		closeFileAfter:    time.Duration(closeFileAfter) * time.Second,
-		writer:            make(chan []byte),
+		writer:            make(chan []byte, 65535),
+		writeLen:          make(chan int, 65535),
+		writerError:       make(chan error, 65535),
 	}
 
 	go l.writeToFile()
@@ -40,28 +43,43 @@ func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFil
 }
 
 func (l *logger) writeToFile() {
+
+	fileLocation := filepath.Join(l.folder, time.Now().Format(l.filePatten))
+
 	for b := range l.writer {
+		// saving to a local variable for the closer func to close this not the old one
+
 		var err error
-		if l.openedFile == nil {
-			l.openedFile, err = os.OpenFile("access.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		fmt.Println(l.openedFile == nil, l.fileLocation != fileLocation)
+		if l.openedFile == nil || l.fileLocation != fileLocation {
+			l.openedFile, err = os.OpenFile(fileLocation, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				l.writeLen <- 0
 				l.writerError <- err
 			}
+			fmt.Println("opened file:", fileLocation)
+			l.fileLocation = fileLocation
 		} else {
 			l.cancelClose()
 		}
 
+		fmt.Print(string(b))
 		write, err := l.openedFile.Write(b)
 		l.writeLen <- write
 		l.writerError <- err
-		l.cancelClose = time.AfterFunc(l.closeFileAfter, func() {
-			l.openedFile.Close()
-			l.openedFile = nil
-		}).Stop
+		l.cancelClose = l.closerRegister(l.openedFile, fileLocation)
 	}
 }
-
+func (l *logger) closerRegister(openedFile *os.File, fileLocation string) func() bool {
+	return time.AfterFunc(l.closeFileAfter, func() {
+		openedFile.Close()
+		fmt.Println("closed file:", fileLocation)
+		//if the open file is not ben updated with a new file the set it to nil
+		if openedFile == l.openedFile {
+			l.openedFile = nil
+		}
+	}).Stop
+}
 func (l *logger) Write(b []byte) (int, error) {
 	l.writer <- b
 	return <-l.writeLen, <-l.writerError
