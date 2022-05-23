@@ -23,7 +23,7 @@ type logger struct {
 	fileLocation      string
 }
 
-func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFileAfter int) *logger {
+func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFileAfter int) (*logger, error) {
 
 	l := &logger{
 		folder:            folder,
@@ -39,7 +39,15 @@ func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFil
 
 	go l.writeToFile()
 	go l.deleteEvent()
-	return l
+	if _, err := os.Stat(l.folder); os.IsNotExist(err) {
+		return l, nil
+	}
+	err := os.MkdirAll(l.folder, 0777)
+	if err != nil {
+		err = fmt.Errorf("creating folder error %w", err)
+	}
+	return l, err
+
 }
 
 func (l *logger) writeToFile() {
@@ -50,9 +58,9 @@ func (l *logger) writeToFile() {
 		// saving to a local variable for the closer func to close this not the old one
 
 		var err error
-		fmt.Println(l.openedFile == nil, l.fileLocation != fileLocation)
+
 		if l.openedFile == nil || l.fileLocation != fileLocation {
-			l.openedFile, err = os.OpenFile(fileLocation, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			l.openedFile, err = os.OpenFile(fileLocation, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0777)
 			if err != nil {
 				l.writeLen <- 0
 				l.writerError <- err
