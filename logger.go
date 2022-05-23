@@ -83,9 +83,9 @@ func (l *logger) writeToFile() {
 func (l *logger) closerRegister(openedFile *os.File, fileLocation string) func() bool {
 	return time.AfterFunc(l.closeFileAfter, func() {
 		openedFile.Close()
-		fmt.Println("closed file:", fileLocation)
 		//if the open file is not ben updated with a new file the set it to nil
 		if openedFile == l.openedFile {
+			fmt.Println("closed file:", fileLocation)
 			l.openedFile = nil
 		}
 	}).Stop
