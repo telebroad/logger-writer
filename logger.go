@@ -37,16 +37,17 @@ func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFil
 		writerError:       make(chan error, 65535),
 	}
 
+	if _, err := os.Stat(l.folder); !os.IsNotExist(err) {
+		err = os.MkdirAll(l.folder, 0777)
+		if err != nil {
+			err = fmt.Errorf("creating folder error %w", err)
+			return l, err
+		}
+	}
+
 	go l.writeToFile()
 	go l.deleteEvent()
-	if _, err := os.Stat(l.folder); os.IsNotExist(err) {
-		return l, nil
-	}
-	err := os.MkdirAll(l.folder, 0777)
-	if err != nil {
-		err = fmt.Errorf("creating folder error %w", err)
-	}
-	return l, err
+	return l, nil
 
 }
 
