@@ -79,6 +79,7 @@ func (l *logger) writeToFile() {
 		l.cancelClose = l.closerRegister(l.openedFile, fileLocation)
 	}
 }
+
 func (l *logger) closerRegister(openedFile *os.File, fileLocation string) func() bool {
 	return time.AfterFunc(l.closeFileAfter, func() {
 		openedFile.Close()
