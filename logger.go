@@ -53,43 +53,54 @@ func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFil
 
 func (l *logger) writeToFile() {
 
-	fileLocation := filepath.Join(l.folder, time.Now().Format(l.filePatten))
-
-	for b := range l.writer {
+	for {
 		// saving to a local variable for the closer func to close this not the old one
 
-		var err error
-
-		if l.openedFile == nil || l.fileLocation != fileLocation {
-			l.openedFile, err = os.OpenFile(fileLocation, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0777)
-			if err != nil {
-				l.writeLen <- 0
-				l.writerError <- err
+		select {
+		case <-time.After(l.closeFileAfter):
+			l.closeFile()
+		case b := <-l.writer:
+			fileLocation := filepath.Join(l.folder, time.Now().Format(l.filePatten))
+			if l.fileLocation != fileLocation {
+				l.closeFile()
+				l.fileLocation = fileLocation
 			}
-			fmt.Println("opened file:", fileLocation)
-			l.fileLocation = fileLocation
-		} else {
-			l.cancelClose()
-		}
+			if l.openedFile == nil {
+				err := l.openFile()
+				if err != nil {
+					l.writeLen <- 0
+					l.writerError <- err
+					return
+				}
+			}
 
-		fmt.Print(string(b))
-		write, err := l.openedFile.Write(b)
-		l.writeLen <- write
-		l.writerError <- err
-		l.cancelClose = l.closerRegister(l.openedFile, fileLocation)
+			fmt.Print(string(b))
+			write, err := l.openedFile.Write(b)
+			l.writeLen <- write
+			l.writerError <- err
+		}
 	}
 }
 
-func (l *logger) closerRegister(openedFile *os.File, fileLocation string) func() bool {
-	return time.AfterFunc(l.closeFileAfter, func() {
-		openedFile.Close()
-		//if the open file is not ben updated with a new file the set it to nil
-		if openedFile == l.openedFile {
-			fmt.Println("closed file:", fileLocation)
-			l.openedFile = nil
-		}
-	}).Stop
+func (l *logger) openFile() (err error) {
+	l.openedFile, err = os.OpenFile(l.fileLocation, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0777)
+	if err != nil {
+		return
+	}
+	fmt.Println("opened file:", l.fileLocation)
+	return
 }
+
+func (l *logger) closeFile() error {
+	if l.openedFile == nil {
+		return fmt.Errorf("logger.openedFile is nil")
+	}
+	err := l.openedFile.Close()
+	fmt.Println("closing file:", l.fileLocation)
+	l.openedFile = nil
+	return err
+}
+
 func (l *logger) Write(b []byte) (int, error) {
 	l.writer <- b
 	return <-l.writeLen, <-l.writerError
