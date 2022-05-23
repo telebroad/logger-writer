@@ -37,12 +37,17 @@ func New(folder, filePatten string, deleteEveryInHour, deleteOlderDays, closeFil
 		writerError:       make(chan error, 65535),
 	}
 
-	if _, err := os.Stat(l.folder); !os.IsNotExist(err) {
-		err = os.MkdirAll(l.folder, 0777)
-		if err != nil {
-			err = fmt.Errorf("creating folder error %w", err)
-			return l, err
+	if _, err := os.Stat(l.folder); os.IsNotExist(err) {
+		if os.IsNotExist(err) {
+			err = os.MkdirAll(l.folder, 0777)
+			if err != nil {
+				err = fmt.Errorf("creating folder error %w", err)
+				return l, err
+			}
+		} else {
+			return l, fmt.Errorf("findind folder %s error %w", l.folder, err)
 		}
+
 	}
 
 	go l.writeToFile()
@@ -60,21 +65,20 @@ func (l *logger) writeToFile() {
 		case <-time.After(l.closeFileAfter):
 			l.closeFile()
 		case b := <-l.writer:
+
 			fileLocation := filepath.Join(l.folder, time.Now().Format(l.filePatten))
 			if l.fileLocation != fileLocation {
 				l.closeFile()
 				l.fileLocation = fileLocation
 			}
-			if l.openedFile == nil {
-				err := l.openFile()
-				if err != nil {
-					l.writeLen <- 0
-					l.writerError <- err
-					return
-				}
+
+			err := l.openFile()
+			if err != nil {
+				l.writeLen <- 0
+				l.writerError <- err
+				return
 			}
 
-			fmt.Print(string(b))
 			write, err := l.openedFile.Write(b)
 			l.writeLen <- write
 			l.writerError <- err
@@ -83,6 +87,10 @@ func (l *logger) writeToFile() {
 }
 
 func (l *logger) openFile() (err error) {
+
+	if l.openedFile != nil {
+		return
+	}
 	l.openedFile, err = os.OpenFile(l.fileLocation, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0777)
 	if err != nil {
 		return
@@ -101,9 +109,14 @@ func (l *logger) closeFile() error {
 	return err
 }
 
-func (l *logger) Write(b []byte) (int, error) {
+func (l *logger) Write(b []byte) (n int, err error) {
+	fmt.Print(string(b))
 	l.writer <- b
-	return <-l.writeLen, <-l.writerError
+	n, err = <-l.writeLen, <-l.writerError
+	if err != nil {
+		fmt.Printf("[ERROR WRITING FILE LOG] %s\n", err.Error())
+	}
+	return
 }
 
 func (l *logger) deleteEvent() {
